@@ -1,0 +1,5 @@
+- Add database functionality
+- Add logging
+- Add Tests
+- Add Makefile
+- Add user validation (database driven)
