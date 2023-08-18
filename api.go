@@ -3,14 +3,33 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
 
+// TODO - change to environement config
+var databaseURL string = "postgresql://myuser:mypassword@postgres:5432/mydb"
+
 func main() {
-	handleRequests()
+	actx := AppContext{}
+
+	// probably not the preferred pattern for depencency injection but this is fine for now
+	if os.Args[0] == "test" {
+		ms := NewMemoryStore(0) // add a count to lengthen process time by seconds
+		actx.storer = &ms
+	} else {
+		ps := NewPostgresStore(databaseURL)
+		actx.storer = &ps
+		close := ps.startDatabase()
+		defer close()
+	}
+
+	handleRequests(actx)
+	fmt.Println("-------------------- main is over")
 }
 
 type responseError struct {
@@ -18,19 +37,15 @@ type responseError struct {
 }
 
 type AppContext struct {
-	Storer Storer
+	storer Storer
 }
 
-func handleRequests() {
+func handleRequests(actx AppContext) {
 	sm := http.NewServeMux()
 	wm := middleWare(sm)
-	ms := NewMemoryStore(0) // add a count to lengthen process time by seconds
-	ctx := AppContext{
-		Storer: &ms,
-	}
 
-	sm.Handle("/people", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handlePeople(&ctx, w, r) }))
-	sm.Handle("/people/", http.StripPrefix("/people/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handlePerson(&ctx, w, r) })))
+	sm.Handle("/people", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handlePeople(&actx, w, r) }))
+	sm.Handle("/people/", http.StripPrefix("/people/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handlePerson(&actx, w, r) })))
 
 	s := http.Server{
 		Addr:         ":8080",
@@ -80,7 +95,7 @@ func handlePeopleGET(actx *AppContext, w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	people, err := actx.Storer.allPeople(ctx)
+	people, err := actx.storer.allPeople(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, responseError{Error: err.Error()})
 		return
@@ -100,7 +115,7 @@ func handlePersonGET(actx *AppContext, w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	person, err := actx.Storer.personForID(ctx, id)
+	person, err := actx.storer.personForID(ctx, id)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, responseError{Error: err.Error()})
 		return
@@ -121,7 +136,7 @@ func handlePeoplePOST(actx *AppContext, w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	pu, err := actx.Storer.addPerson(ctx, p)
+	pu, err := actx.storer.addPerson(ctx, p)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, responseError{Error: err.Error()})
 		return
@@ -148,7 +163,7 @@ func handlePersonPUT(actx *AppContext, w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	pu, err := actx.Storer.updatePerson(ctx, id, p)
+	pu, err := actx.storer.updatePerson(ctx, id, p)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, responseError{Error: err.Error()})
 		return
@@ -168,7 +183,7 @@ func handlePersonDELETE(actx *AppContext, w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	if err := actx.Storer.deletePerson(ctx, id); err != nil {
+	if err := actx.storer.deletePerson(ctx, id); err != nil {
 		writeJSON(w, http.StatusBadRequest, responseError{Error: err.Error()})
 		return
 	}
